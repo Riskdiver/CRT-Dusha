@@ -30,7 +30,7 @@
 //  CRT Dusha (Soul) ReShade FX Shader
 //  Realistic Multi-stage Fibonacci-weighted Exponential Phosphor Decay
 //  License: MIT
-//  Version: 1.0
+//  Version: 1.1
 //---------------------------------------------------------------------------------------
 
 // NOTE: This shader intentionally works in gamma-encoded space (not linear) for three reasons:
@@ -286,6 +286,58 @@ uniform float ApertureGrilleStrength <
     ui_tooltip="Controls the intensity of vertical RGB color separation in Trinitron mode.\n\n0.0 = no color separation (disabled).\n0.3 = subtle, authentic.\n0.5 = moderate.\n1.0 = maximum separation.";
 > = 0.15;
 
+// === SPLIT SCREEN COMPARISON ===
+uniform bool EnableSplitScreen <
+    ui_category="Split Screen Comparison";
+    ui_label="Enable Split Screen";
+    ui_tooltip="Shows shader effect on left half, original image on right half for comparison.";
+> = false;
+
+uniform float SplitPosition <
+    ui_category="Split Screen Comparison";
+    ui_type="slider";
+    ui_min=0.0; ui_max=1.0; ui_step=0.01;
+    ui_label="Split Position";
+    ui_tooltip="Adjusts the vertical dividing line position.\n\n0.0 = all original.\n0.5 = centered split.\n1.0 = all effect.";
+> = 0.5;
+
+uniform bool ShowDividerLine <
+    ui_category="Split Screen Comparison";
+    ui_label="Show Divider Line";
+    ui_tooltip="Draws a visible line at the split position.";
+> = true;
+
+// === LCD BURN-IN PROTECTION ===
+uniform bool LCDSafeMode <
+    ui_category="LCD Burn-in Protection";
+    ui_label="Enable LCD Safe Mode";
+    ui_tooltip="Prevents burn-in/image retention on LCD displays by periodically breaking same frames/phases pattern.\n\nOnly needed for EVEN Frames per Effect on LCD panels. Causes brief phase flip.\n\nNot needed for: ODD Frames per Effect or OLED displays.";
+> = true;
+
+uniform int PhaseFlipMethod <
+    ui_category="LCD Burn-in Protection / Phase Flip";
+    ui_type="combo";
+    ui_items="Phase Jump\0Phase Flip\0Frame Drop\0";
+    ui_label="Phase Flip Method";
+    ui_tooltip="Phase Jump: Jumps phase after accumulating enough offset.\nPhase Flip: Instant flip every interval.\nFrame Drop: Skip frame every interval.";
+> = 0;
+
+uniform float JumpRate <
+    ui_category="LCD Burn-in Protection / Phase Flip";
+    ui_type="slider";
+    ui_min=0.0001; ui_max=0.1; ui_step=0.0001;
+    ui_label="Phase Jump Rate";
+    ui_tooltip="Controls the rate at which phase offset accumulates when using the Phase Jump method.\n\n0.0001 = very slow, non-intrusive jumps.\n0.001 = slow, subtle.\n0.01 = fast, noticeable.\n0.1 = very fast.";
+> = 0.0001;
+
+uniform int FlipRate <
+    ui_category="LCD Burn-in Protection / Phase Flip";
+    ui_type="slider";
+    ui_min=1; ui_max=3600; ui_step=1;
+    ui_label="Phase Flip Interval";
+    ui_tooltip="Defines how often phase flipping occurs (measured in frames).\n\n600 = balanced.\n1200 = maximum safety, more frequent disruption.\n1800+ frames = minimal disruption, slower protection.";
+> = 600;
+
 //--------------------------------------------------------------------------------
 // Runtime Parameters (provided by ReShade runtime)
 #include "ReShade.fxh"
@@ -355,8 +407,37 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
         default: break; // 0 Manual -> keep uniforms
     }
 
+    // --- LCD Burn-in Protection ---
+    int effectiveFrameCount = FrameCount;
+    float phaseOffset = 0.0;
+
+    if (LCDSafeMode && (FramesPerEffect % 2 == 0))
+    {
+        int protectionInterval = FlipRate;
+
+        // Ensure interval doesn't align perfectly with decay cycle
+        if ((protectionInterval % FramesPerEffect) == 0)
+            protectionInterval += 1;
+
+        if (PhaseFlipMethod == 0)
+        {
+            // Method 1: Phase Jump - discrete jumps
+            effectiveFrameCount += int(FrameCount * JumpRate);
+        }
+        else if (PhaseFlipMethod == 1)
+        {
+           // Method 2: Phase Flip - alternating polarity
+            phaseOffset = 0.5 * ((FrameCount / protectionInterval) % 2);
+        }
+        else if (PhaseFlipMethod == 2)
+        {
+             // Method 3: Frame Drop - skip frames to shift phase
+            effectiveFrameCount -= FrameCount / protectionInterval;
+        }
+    }
+
     // --- CRT timing simulation ---
-    const float fraction = frac(FrameCount * rcp(DebugSlowFactor) * rcp(FramesPerEffect));
+    const float fraction = frac((effectiveFrameCount * rcp(DebugSlowFactor) * rcp(FramesPerEffect)) + phaseOffset);
 
     // --- Sample source frame (sRGB encoded, ~2.2 gamma) ---
     float3 frameCurr = GetFrame(texcoord);
@@ -518,7 +599,6 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
         // Apply the scanline mask to the phosphor emission
         // Bright scanlines remain at full intensity (1.0)
         // Dark gaps are dimmed by ScanlineDarkness amount
-        // (For Trinitron mode, scanlineMask is 1.0 so this has no effect)
         phosphorEmission *= scanlineMask;
     }
 
@@ -547,6 +627,22 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
         phosphorEmission = mul(hueMatrix, phosphorEmission);
     }
 
+    // --- Split Screen Comparison Mode ---
+    if (EnableSplitScreen) {
+        // Get original unprocessed frame
+        float3 original = GetFrame(texcoord);
+        
+        // Determine which side to show
+        if (texcoord.x > SplitPosition) {
+            phosphorEmission = original;
+        }
+        
+        // Draw divider line (2-pixel wide vertical line)
+        if (ShowDividerLine && abs(texcoord.x - SplitPosition) < 2.0 * BUFFER_RCP_WIDTH) {
+            phosphorEmission = float3(1.0, 1.0, 1.0); // White divider line
+        }
+    }
+    
     // Return as-is, preserves HDR-like bright highlights. Softclip (earlier in pipeline) handles extreme brightness gracefully. 
     // Should not have visual artifacts (negative colors, NaN issues), so no need for saturate()
     return float4(phosphorEmission, 1.0);
