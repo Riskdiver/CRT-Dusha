@@ -16,7 +16,9 @@ That's why I decided to create my own solution: **CRT Dusha** (Soul in Russian) 
 - **Motion Blur Reduction**: Stroboscopic effect through rapid phosphor decay reduces sample-and-hold blur for sharper motion clarity.  
 - **3dfx Voodoo2 Pipeline**: Optional 16-bit RGB565 color quantization with Bayer ordered dithering (2x2, 4x4, 8x8 matrices) for authentic mid-90s graphics card aesthetic.  
 - **Brightness Preservation**: Maintains image brightness through decay-based approach rather than black frame insertion.  
-- **Two Decay Modes**: Uniform Pulse: Global flash and decay (original concept, creative CRT effect). Raster Sweep: Vertical scan beam simulation (classic CRT top-to-bottom refresh variation). 
+- **Two Decay Modes**: Uniform Pulse: Global flash and decay (original concept, creative CRT effect). Raster Sweep: Vertical scan beam simulation (classic CRT top-to-bottom refresh variation).
+- **Split Screen / Side-by-Side Mode**: Displays the shader-processed image on one side and the original, unprocessed image on the other, allowing easy real-time comparison of the effect.
+- **LCD Safe Mode**: Enabled by default, introduces subtle phase flips to prevent DC voltage buildup and temporary image retention on LCDs. 
 - **Lower-end Device Optimized**: Specifically tuned for Steam Deck OLED performance.  
 - **DX9 Compatible**: Shader Model 3.0 support for older games.
 
@@ -54,7 +56,8 @@ Besides simple scanlines and Trinitron-like vertical RGB color separation, no CR
 
 #### LCD Image Retention (DC Voltage Buildup)
 
-On LCD panels, repeated transitions between bright and very dark frames can cause ions inside the liquid crystal layer to drift over time. This ion drift creates a DC voltage buildup in the pixel cells, which manifests as temporary image retention ("burn-in"). This is a physical panel behavior, not a shader bug, and it only occurs with high-contrast static images displayed for extended periods.
+On LCD panels, prolonged display of high-contrast static patterns can cause ions in the liquid crystal layer to drift, leading to a DC voltage buildup inside the pixel cells. This buildup can temporarily bias the pixels, resulting in image retention (“burn-in”).
+This is an electro-physical property of LCDs, not a shader issue, and it primarily appears when alternating bright and dark frames repeat in a perfectly even pattern.
 
 **Examples**:
 
@@ -62,18 +65,23 @@ On LCD panels, repeated transitions between bright and very dark frames can caus
 - ReShade overlays left visible for extended periods
 - Any UI elements with bright/dark patterns that don't change
 
-Mitigation: Use odd "Frames Per Effect" values (3, 5, 7, etc.) when displaying static content. This breaks up the repetitive pattern and prevents DC voltage buildup.
+**Mitigation**
 
-**Why no automatic protection?**
+- Use **odd “Frames Per Effect” values** (3, 5, 7, etc.) - this naturally breaks the repetitive frame polarity pattern.
 
-After extensive testing of various compensation methods, I chose not to implement automatic protection because:
+- Or keep **LCD Safe Mode** enabled - it’s **on by default** and introduces phase flips to prevent DC buildup. You may occasionally notice a very brief, single-frame flick, which is intentional and part of the burn-in protection cycle.
 
-- No perfect solution exists without compromising the CRT effect
-- Most modern LCDs have built-in protection mechanisms (which conflict with shader-based techniques anyway)
-- The default 4-frame decay window produces slow falloff, greatly reducing severity, only extreme cases (high contrast + 2-frame decay + static imagery) exhibit noticeable retention
-- Retention fades naturally as soon as motion resumes
-- For static content, simply switch to odd "Frames Per Effect" values
-- OLEDs are getting cheaper and don't have these retention problems
+**Note:** Overlays rendered **on top of the shader** (like ReShade HUDs or GUI overlays) are **not affected** by this mitigation. They can still produce static high-contrast patterns that may contribute to temporary image retention.
+
+**LCD Safe Mode** offers several selectable techniques:
+
+- Phase Jump (default) - slowly accumulates small phase offsets and performs discrete phase jumps at long intervals. The effect is barely perceptible at default settings
+
+- Phase Flip - instant polarity inversion every set interval
+
+- Frame Drop - skips a frame periodically to break the pattern
+
+These modes only activate when even-frame decay is used (e.g., 2 or 4 frames per effect), where phase repetition could otherwise accumulate charge.
 
 #### Frame Time Stability
   
@@ -85,7 +93,7 @@ I have spent several weeks developing and testing this shader. If you find it us
 
 **Buy me a beer**: [PayPal](https://www.paypal.com/donate/?hosted_button_id=M7ZZ8WVFA5WCS)
 
-**Or a cofee**: [Ko-fi](https://ko-fi.com/maximlapounov)
+**Or a coffee**: [Ko-fi](https://ko-fi.com/maximlapounov)
 
 ## Contact
 
