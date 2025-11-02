@@ -75,7 +75,7 @@ This is an electro-physical property of LCDs, not a shader issue, and it primari
 
 **LCD Safe Mode** offers several selectable techniques:
 
-- Phase Jump (default) - slowly accumulates small phase offsets and performs discrete phase jumps at long intervals. The effect is barely perceptible at default settings
+- Phase Jump (default) - slowly accumulates small phase offsets and performs discrete phase jumps at long intervals. By default, the effect provides **mild burn-in mitigation**, but the **Jump Rate** can be increased to make the protection stronger, at the cost of slightly more noticeable phase flips.
 
 - Phase Flip - instant polarity inversion every set interval
 
