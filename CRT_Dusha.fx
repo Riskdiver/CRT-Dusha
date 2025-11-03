@@ -335,7 +335,7 @@ uniform int FlipRate <
     ui_type="slider";
     ui_min=1; ui_max=3600; ui_step=1;
     ui_label="Phase Flip Interval";
-    ui_tooltip="Defines how often phase flipping occurs (measured in frames).\n\n600 = balanced.\n1200 = maximum safety, more frequent disruption.\n1800+ frames = minimal disruption, slower protection.";
+    ui_tooltip="Defines how often phase flipping occurs when using the Phase Flip and Frame Drop methods (measured in frames).\n\n600 = maximum safety, frequent flips.\n1200 = balanced, less frequent flips.\n1800+ frames = minimal disruption, slower protection.";
 > = 600;
 
 //--------------------------------------------------------------------------------
@@ -653,3 +653,4 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 technique CRT_Dusha {
     pass { VertexShader = PostProcessVS; PixelShader = PS_CRT_Dusha; }
 }
+
