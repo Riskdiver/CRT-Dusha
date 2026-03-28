@@ -4,7 +4,6 @@
 //
 //  Copyright (c) 2025 Maxim Lapounov
 //  Twitter/X: @MaximLapounov
-//  Patreon: @MaximLapounov
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -30,34 +29,29 @@
 //  CRT Dusha (Soul) ReShade FX Shader
 //  Realistic Multi-stage Fibonacci-weighted Exponential Phosphor Decay
 //  License: MIT
-//  Version: 1.1
+//  Version: 1.2
 //---------------------------------------------------------------------------------------
 
-// NOTE: This shader intentionally works in gamma-encoded space (not linear) for three reasons:
+// NOTE: This shader works in gamma-encoded space (not linear) for three reasons:
 //
-// 1. Provides superior motion blur reduction and more authentic CRT phosphor decay
-//    compared to linear-space processing. The perceptually-weighted precision distribution
-//    in gamma space creates more realistic trailing/persistence effects.
-// 2. Matches authentic Voodoo2 hardware behavior (quantization in gamma space)
-// 3. Real CRTs never linearized their signal path. Human vision is nonlinear.
+// 1. Gamma space better approximates CRT phosphor decay and persistence effects.
+//    The perceptually-weighted precision distribution produces more natural trailing.
+// 2. Matches Voodoo2 hardware behavior (quantization in gamma space).
+// 3. Real CRTs never linearized their signal path, and human vision is nonlinear,
+//    so gamma space is a closer fit to how the original hardware actually behaved.
 //
-// However, we are not modelling CRT as a physical object, we are modelling the effects that CRT tech provided.
 
 //----------------------------------------------------------------------------------------------------------------
 // Pipeline:
 //
 // sRGB(~2.2 encoded source)                // Game image as provided by GPU
 //      ↓
-// pow(BeamVoltage)                         // Power-law response (beam voltage → phosphor excitation) = CONTRAST
+// pow(BeamVoltage)                         // Power-law response = CONTRAST (beam voltage → phosphor excitation) 
 //      ↓
 // + MidtoneContrast                        // Nonlinear punch in midtones for analog 'pop' (color-preserving parabola)
 //      ↓
-// + Dither (+Quantize16Bit optional)       // Ordered noise in gamma space (Voodoo2 / DAC precision simulation)
+// ± Quantize16Bit + Dither (optional)      // Ordered noise in gamma space (Voodoo2 / DAC precision simulation)
 //                                          // Adds analog-like grain, enhancing texture and masking banding.
-//                                          // Interacts with decay: it can slightly reduce motion
-//                                          // clarity by introducing fine temporal interference.
-//                                          // Effect is strongest in Vertical Raster Sweep, weaker in Uniform
-//                                          // Pulse.
 //      ↓
 // × BeamCurrent                            // Linear amplitude scaling = BRIGHTNESS (beam current intensity)
 //      ↓
@@ -70,18 +64,14 @@
 // perceived ≈ gamma 2.4–2.8 (typical CRT)  // Matches analog CRT luminance response
 //                                          // Shader power-law can simulate any gamma curve (0 → ∞),
 //                                          // though practical visual range is usually 0.5–5.0
-// ---------------------------------------------------------------------------------------------------------------
-// Optional controls:
-// Hue & Saturation adjustments - analog color shift & saturation like TV controls
-// BlackLevel floor - prevents full black collapse (residual CRT glow)
-
+// ----------------------------------------------------------------------------------------------------------------
 
 // === PRESETS ===
 uniform int Preset <
     ui_type = "combo";
     ui_label = "Color Preset";
-    ui_items = "Manual\0Flat sRGB\0Vibrant\0Quick Phosphor\0";
-    ui_tooltip = "Reset to defaults before use. \n\nManual: Use slider settings.\nFlat sRGB: Standart 2.2 Gamma (Contrast 1.0, Brightness 2.0, Black Level 0.500).\nVibrant: High contrast, punchy colors (Contrast 2.0, Brightness 40.0).\nQuick Phosphor: CRT-like phosphor decay speed (Contrast 1.8, Brightness 60.0 Midtone Boost 5.0, Softclip Strength 1.00, Black Level 0.0, Decay Speed 25.0).\n\nNOTE: When a preset is active, slider changes used in preset are ignored by the shader.";
+    ui_items = "Manual\0Vibrant\0Old TV\0";
+    ui_tooltip = "Reset to defaults before use.\n\nManual: Use slider settings.\nVibrant: Punchy colors, artistic effect, no black frames (Contrast 2.0, Brightness 40.0, Softclip 0.9, Decay Speed 1.0).\nOld TV: Warm vintage feel, 288 scanlines at 1440p (Contrast 1.5, Brightness 5.0, Softclip 0.85, Saturation 1.1,\nHue 2.0, Phosphor Tint RGB(255, 242, 217), Scanlines 3px with 2px gaps, Scanline Darkness 0.5, Decay Speed 8.0).\n\nNOTE: When a preset is active, sliders used by that preset are ignored.";
 > = 0;
 
 // === CRT TIMING ===
@@ -89,50 +79,56 @@ uniform int FramesPerEffect <
     ui_category="CRT Timing"; 
     ui_type="slider"; 
     ui_min=1; ui_max=12; ui_step=1; 
-    ui_label="Frames per Effect"; 
-    ui_tooltip="Duration of full decay cycle in frames. Higher values = smoother decay but require higher refresh rates to avoid flicker.\n\nEVEN numbers: Best effect quality.\nODD numbers: Mediocre effect quality. Use when 'parking' the shader with static content to prevent LCD burn-in (breaks up DC voltage buildup).";
-> = 4;
+    ui_label="Frames per Decay Cycle"; 
+    ui_tooltip="Duration of full decay cycle in frames. Decay is an extended and more complex version of a display trick technique called BFI (Black Frame Insertion). \nEach cycle consists of one bright frame followed by progressively darker frames as the phosphor decays. \nExample: At 160hz with 4 frames per cycle - 1 bright frame + 3 decay frames = 40 visible bright frames per second. 2 frames per decay - 1 bright + 1 dark/black is simple BFI (50/50). \nHigher number of dark/black frames in cycle improves motion clarity up to a point, but reduces perceived brightness and may cause flicker at lower framerates. \nThis and the options below control the decay cycle behaviour. Fine-tune to get the right balance of bright/dark/black frames for your specific use case.\n\nNOTE: EVEN number of frames per cycle may cause temporary image retention/burn-in on LCD displays. 1 bright + 1 black (pure BFI) will cause it quicker. ODD numbers and OLED are safe.\nMild protection is enabled by default but can be further tuned in the LCD Burn-in Protection section.";
+> = 3;
 
 uniform int DecayMode < 
     ui_category="CRT Timing"; 
     ui_type="combo"; 
-    ui_items="Uniform Pulse\0Raster Continuous Sweep\0"; 
+    ui_items="Uniform Pulse\0Raster Sweep\0"; 
     ui_label="Decay Mode"; 
-    ui_tooltip="Decay simulation type:\n\nUniform Pulse: global flash + decay.\nRaster Continuous Sweep: smooth top-to-bottom beam motion.";
-> = 1;
+    ui_tooltip="Decay simulation type:\n\nUniform Pulse: all pixels decay in sync.\nRaster Sweep: decay phase offset increases from top to bottom.";
+> = 0;
 
 uniform float RasterFrequency < 
     ui_category="CRT Timing"; 
     ui_type="slider"; 
-    ui_min=0.001; ui_max=10.0; ui_step=0.001; 
+    ui_min=0.001; ui_max=1.0; ui_step=0.001; 
     ui_label="Raster Frequency Multiplier"; 
     ui_tooltip="Adjusts the speed/spacing of Raster Sweep mode."; 
-> = 0.010;
+> = 0.050;
 
 uniform float DebugSlowFactor < 
     ui_category="CRT Timing"; 
     ui_type="slider"; 
     ui_min=1.0; ui_max=500.0; ui_step=1.0; 
-    ui_label="Slow Motion Factor"; 
+    ui_label="Debug: Slow Motion Factor"; 
     ui_tooltip="Slows down the decay/timing simulation for debugging or demonstration."; 
 > = 1.0;
+
+uniform bool DebugFrameStep < 
+    ui_label = "Debug: Slow Motion Frame Step";
+    ui_category="CRT Timing";  
+    ui_tooltip="Locks decay cycle to discrete frame steps instead of continuous interpolation. \nUse with Slow Motion Factor to step through each frame of the decay cycle one at a time for debugging or demonstration purposes. \nCurrent frame number is displayed in the top right corner of the screen."; 
+>;
 
 // === CRT DISPLAY ===
 uniform float BeamVoltage < 
     ui_category="CRT Display"; 
     ui_type="slider"; 
-    ui_min=0.01; ui_max=5.0; ui_step=0.01; 
-    ui_label="Contrast (Beam Voltage)";
-    ui_tooltip="Controls image contrast via gamma curve. Higher values = darker mid-tones, brighter highlights.\n\nHigher values can be compensated with Brightness to create more vivid image.\n\nTechnical: Simulates electron beam accelerating voltage affecting the phosphor's power-law response curve."; 
-> = 1.35;
+    ui_min=0.01; ui_max=10.0; ui_step=0.01; 
+    ui_label="Contrast";
+    ui_tooltip="Controls image contrast via gamma curve.\n\nHigher values can be compensated with Brightness to create more vivid image.\n\nTechnical: Simulates electron beam accelerating voltage affecting the phosphor's power-law response curve."; 
+> = 2.2;
 
 uniform float BeamCurrent < 
     ui_category="CRT Display"; 
     ui_type="slider"; 
-    ui_min=0.1; ui_max=1000.0; ui_step=0.01; 
-    ui_label="Brightness (Beam Current)"; 
-    ui_tooltip="Controls overall image brightness. Higher values = brighter image.\n\nCompensates for the darkening from contrast curve. Adjust together with Contrast for best results, higher contrast needs higher brightness.\n\nTechnical: Simulates electron beam current strength (number of electrons striking the phosphor per frame)."; 
-> = 5.0;
+    ui_min=0.1; ui_max=1000.0; ui_step=1.0; 
+    ui_label="Brightness"; 
+    ui_tooltip="Controls overall image brightness.\n\nCompensates for the darkening from contrast curve. Adjust together with Contrast for best results, higher Contrast needs higher Brightness.\n\nTechnical: Simulates electron beam current strength (number of electrons striking the phosphor per frame)."; 
+> = 15.0;
 
 uniform float MidtoneContrast < 
     ui_category="CRT Display"; 
@@ -147,8 +143,8 @@ uniform float ToneMapStrength <
     ui_type="slider"; 
     ui_min=0.00; ui_max=1.0; ui_step=0.01; 
     ui_label="Softclip Strength"; 
-    ui_tooltip="Controls how aggressively highlights are compressed. Lower = subtle, higher = full Reinhard.\n\n0.0 - 0.3 = Punchy, high midtone contrast - best for 90s games, pixel art, CRT authenticity.\n0.4 - 0.6 = Balanced soft highlights - good for older PC games or mixed content.\n0.7 - 1.0 = Full Reinhard - cinematic or modern SDR/HDR content, preserves skin tones in movies."; 
-> = 0.0;
+    ui_tooltip="Phosphor saturation compression strength.\n\n1.0 = Full (Reinhard) softclip - correct for SDR CRT simulation, phosphor saturates naturally at high drive levels.\n0.1 - 0.9 = Partial compression - reduces highlight rolloff strength, less physically accurate but may suit personal preference.\n0.0 = No compression - linear output, highlights are not rolled off. Use with HDR pipelines or when downstream tonemapping handles highlight compression.";
+> = 1.0;
 
 // === COLOR ADJUSTMENT ===
 uniform float Saturation < 
@@ -159,37 +155,44 @@ uniform float Saturation <
     ui_tooltip="Adjusts color intensity. 0 = grayscale, 1 = normal, >1 = oversaturated.\n\nTypical CRT TV 'Color' control."; 
 > = 1.0;
 
+uniform float3 TintColor <
+    ui_category = "CRT Display";
+    ui_type = "color";
+    ui_label = "Phosphor Tint";
+    ui_tooltip = "Tints the image with a color cast. Set Color Saturation to 0 first for true monochrome phosphor effect.\n\nWhite: no tint (default)\nGreen: P31 terminal monitor\nAmber: P3 amber monitor\nCool blue-white: cold phosphor";
+> = float3(1.0, 1.0, 1.0);
+
 uniform float Hue < 
     ui_category="CRT Display"; 
     ui_type="slider"; 
     ui_min=-180.0; ui_max=180.0; ui_step=0.1; 
-    ui_label="Tint (Hue Shift)"; 
-    ui_tooltip="Shifts all colors around the color wheel. ±180° range.\n\nTypical CRT TV 'Tint' control."; 
+    ui_label="Hue Shift"; 
+    ui_tooltip="Shifts all colors around the color wheel. ±180° range.\n\nTypical CRT TV 'Hue' control."; 
 > = 0.0;
-
-uniform float BlackLevel < 
-    ui_category="CRT Display"; 
-    ui_type="slider"; 
-    ui_min=0.0; ui_max=1.0; ui_step=0.001; 
-    ui_label="Decay Black Level Floor"; 
-    ui_tooltip="Minimum brightness floor. Prevents decay from reaching full black for a more realistic CRT glow."; 
-> = 0.005;
 
 // === PHOSPHOR DECAY ===
 uniform float DecaySpeed < 
     ui_category="Phosphor Decay"; 
     ui_type="slider"; 
-    ui_min=0.01; ui_max=25.0; ui_step=0.01; 
+    ui_min=0.01; ui_max=50.0; ui_step=0.01; 
     ui_label="Global Decay Speed"; 
-    ui_tooltip="Overall speed of phosphor decay. Higher = quicker fade into black. \n\nFaster decay increases motion clarity but creates stroboscopic 'judder' as the eye loses temporal information between frames."; 
-> = 1.0;
+    ui_tooltip="Overall speed of phosphor decay. Higher = decay cycle fades to black quicker (more dark/black frames). \n\nFaster decay increases motion clarity but creates stroboscopic 'judder' as the eye loses temporal information between frames."; 
+> = 10.0;
+
+uniform int DecayLevels < 
+    ui_category="Phosphor Decay"; 
+    ui_type="slider"; 
+    ui_min=1; ui_max=10; ui_step=1; 
+    ui_label="Decay Stages"; 
+   ui_tooltip="Number of exponential decay stages. More stages = darker later frames and a richer decay curve shape.";
+> = 5;
 
 uniform float DecayMultR < 
     ui_category="Phosphor Decay"; 
     ui_type="slider"; 
     ui_min=0.01; ui_max=5.0; ui_step=0.01; 
     ui_label="Red Decay Multiplier"; 
-    ui_tooltip="Relative decay speed for red phosphors (vs global). Lower = longer persistence, higher = faster fade."; 
+    ui_tooltip="Relative decay speed for red phosphors (vs global). Lower = longer persistence, higher = faster fade. \nHigher values for RGB phosphors only have noticeable effect at low Global Decay Speed settings."; 
 > = 0.50;
 
 uniform float DecayMultG < 
@@ -208,42 +211,27 @@ uniform float DecayMultB <
     ui_tooltip="Relative decay speed for blue phosphors (vs global). Blue phosphors usually have the fastest decay."; 
 > = 0.70;
 
-uniform int DecayLevels < 
-    ui_category="Phosphor Decay"; 
-    ui_type="slider"; 
-    ui_min=1; ui_max=10; ui_step=1; 
-    ui_label="Decay Stages"; 
-    ui_tooltip="Number of exponential decay stages to blend. More = richer trailing effect but quicker fade into black."; 
-> = 5;
+// === 3dfx Voodoo2 PIPELINE ===
+uniform bool Quantize16Bit < 
+    ui_category="3dfx Voodoo2"; 
+    ui_label="Enable Voodoo2 Quantize to 16-bit (5:6:5)"; 
+    ui_tooltip="Simulates Voodoo2 16-bit framebuffer color precision by quantizing to 5-bit red, 6-bit green, 5-bit blue (RGB565)."; 
+> = false;
 
-// === DITHERING / 3dfx Voodoo2 PIPELINE ===
 uniform int DitherSize < 
-    ui_category="Dithering / 3dfx Voodoo2"; 
+    ui_category="3dfx Voodoo2"; 
     ui_type="combo"; 
     ui_items="2x2\0""4x4\0""8x8\0"; 
-    ui_label="Bayer Dither Size"; 
-    ui_tooltip="Matrix size for Bayer ordered dithering:\n\n2x2 = finest grain.\n4x4 = medium structure.\n8x8 = coarse grid (authentic Voodoo2 look)\n\nCan simulate physical phosphor dot/mesh patterns on CRT screens or hide banding.";
-> = 0;
+    ui_label="V2 Bayer Dither Size"; 
+    ui_tooltip="Matrix size for Bayer ordered dithering:\n\n2x2 = finest pattern, least visible, fewer unique threshold values.\n4x4 = closest to original Voodoo2 dither pattern, default and recommended.\n8x8 = largest pattern, most visible structure, best banding reduction at higher resolutions.\n\nVoodoo2 used a small ordered dither pattern for RGB565, exact implementation was undocumented.\nTry different sizes at your resolution for best results - larger matrices work better at higher resolutions.";
+> = 1;
 
 uniform float DitherStrength < 
-    ui_category="Dithering / 3dfx Voodoo2"; 
+    ui_category="3dfx Voodoo2"; 
     ui_type="slider"; 
-    ui_min=0.0; ui_max=10.0; ui_step=0.001; 
-    ui_label="Dither Strength"; 
-    ui_tooltip="Strength of dithering noise used to reduce banding.\n\n0.0 = maximum motion blur reduction (no dither)\n0.02 = subtle, balanced \nHigher = more visible grain\n\nWorks best with Quantize to 16-bit (5:6:5) for authentic 3dfx Voodoo2 output.";
-> = 0.0;
-
-uniform bool Quantize16Bit < 
-    ui_category="Dithering / 3dfx Voodoo2"; 
-    ui_label="Quantize to 16-bit (5:6:5)"; 
-    ui_tooltip="Simulates a 16-bit color framebuffer by quantizing channels (5-bit red, 6-bit green, 5-bit blue).\n\nRecreates the limited color precision of the 3dfx Voodoo2 framebuffer."; 
-> = false;
-
-uniform bool TemporalDither < 
-    ui_category="Dithering / 3dfx Voodoo2"; 
-    ui_label="Enable Temporal Dithering"; 
-    ui_tooltip="Animates the dithering pattern over time to reduce visible grid.\n\nNot authentic to CRT hardware or 3dfx Voodoo2 and can reduce motion clarity.\n\nOFF = authentic, maximum motion blur reduction (recommended).\nON = smoother appearance, reduced motion clarity."; 
-> = false;
+    ui_min=0.0; ui_max=2.0; ui_step=0.01; 
+    ui_label="V2 Dither Strength"; 
+    ui_tooltip="Strength of the Bayer dithering pattern.\n\n0.0 = no dithering, banding visible.\n1.0 = default, recommended starting point.\nHigher = more aggressive dithering, pattern becomes visible.";> = 1.0;
 
 // === SCANLINES ===
 uniform int ScanlineDirection <
@@ -259,7 +247,7 @@ uniform float ScanlineThickness <
     ui_type="slider"; 
     ui_min=1.0; ui_max=8.0; ui_step=1.0; 
     ui_label="Scanline Width (pixels)"; 
-    ui_tooltip="Width of the bright scanline.\n\n1-2 = fine (good for 1080p).\n3-4 = medium (good for 1440p).\n5-8 = thick (good for 4K)."; 
+    ui_tooltip="Width of the bright scanline in pixels.\n\n1-2px = fine, good for simulating a CRT monitor at higher resolutions.\n3-4px = medium, good for simulating a TV (e.g. 3px bright + 2px gap = 288 lines at 1440p).\n5-8px = thick, good for 4K or oversized TV effect."; 
 > = 2.0;
 
 uniform float ScanlineGapSize < 
@@ -267,7 +255,7 @@ uniform float ScanlineGapSize <
     ui_type="slider"; 
     ui_min=0.0; ui_max=4.0; ui_step=1.0; 
     ui_label="Scanline Gap Width (pixels)"; 
-    ui_tooltip="Width of the dark gap between bright scanlines.\n\n0 = no gaps (solid).\n1 = subtle (authentic CRT).\n2 = moderate\n3-4 = pronounced."; 
+    ui_tooltip="Width of the dark gap between bright scanlines in pixels.\n\n0 = disabled, no scanline pattern applied.\n1 = subtle gap.\n2 = moderate.\n3-4 = pronounced.";
 > = 0.0;
 
 uniform float ScanlineDarkness < 
@@ -282,8 +270,8 @@ uniform float ApertureGrilleStrength <
     ui_category="Scanlines";
     ui_type="slider";
     ui_min=0.0; ui_max=1.0; ui_step=0.05;
-    ui_label="Aperture Grille Strength (Trinitron)";
-    ui_tooltip="Controls the intensity of vertical RGB color separation in Trinitron mode.\n\n0.0 = no color separation (disabled).\n0.3 = subtle, authentic.\n0.5 = moderate.\n1.0 = maximum separation.";
+    ui_label="Trinitron Color Separation";
+    ui_tooltip="Controls the intensity of vertical RGB color separation in Trinitron mode.\n\n0.0 = no color separation (disabled).\n0.15 = subtle, authentic.\n0.3 = moderate.\n1.0 = maximum separation.\n\nProduces the characteristic Trinitron greenish tint due to the green stripe dominance in the aperture grille.";
 > = 0.15;
 
 // === SPLIT SCREEN COMPARISON ===
@@ -311,15 +299,15 @@ uniform bool ShowDividerLine <
 uniform bool LCDSafeMode <
     ui_category="LCD Burn-in Protection";
     ui_label="Enable LCD Safe Mode";
-    ui_tooltip="Prevents burn-in/image retention on LCD displays by periodically breaking same frames/phases pattern.\n\nOnly needed for EVEN Frames per Effect on LCD panels. Causes brief phase flip.\n\nNot needed for: ODD Frames per Effect or OLED displays.";
+    ui_tooltip="Prevents burn-in/image retention on LCD displays by periodically breaking same frames/phases pattern.\n\nOnly needed for EVEN Frames per Decay on LCD panels. Causes brief phase flip.\n\nNot needed for: ODD Frames per Decay or OLED displays.";
 > = true;
 
 uniform int PhaseFlipMethod <
     ui_category="LCD Burn-in Protection / Phase Flip";
     ui_type="combo";
-    ui_items="Phase Jump\0Phase Flip\0Frame Drop\0";
+    ui_items="Phase Jump\0Frame Drop\0";
     ui_label="Phase Flip Method";
-    ui_tooltip="Phase Jump: Jumps phase after accumulating enough offset.\nPhase Flip: Instant flip every interval.\nFrame Drop: Skip frame every interval.";
+    ui_tooltip="Phase Jump: Jumps phase after accumulating enough offset.\nFrame Drop: Skip frame every interval.";
 > = 0;
 
 uniform float JumpRate <
@@ -333,10 +321,10 @@ uniform float JumpRate <
 uniform int FlipRate <
     ui_category="LCD Burn-in Protection / Phase Flip";
     ui_type="slider";
-    ui_min=1; ui_max=3600; ui_step=1;
-    ui_label="Phase Flip Interval";
-    ui_tooltip="Defines how often phase flipping occurs when using the Phase Flip and Frame Drop methods (measured in frames).\n\n600 = maximum safety, frequent flips.\n1200 = balanced, less frequent flips.\n1800+ frames = minimal disruption, slower protection.";
-> = 600;
+    ui_min=1000; ui_max=100000; ui_step=1;
+    ui_label="Frame Drop Interval";
+    ui_tooltip="Defines how often phase flipping occurs when using the Frame Drop methods (measured in frames).\n\n1000 = maximum safety, frequent flips.\n5000 = balanced, less frequent flips.\n10000+ frames = minimal disruption, slower protection.";
+> = 1000;
 
 //--------------------------------------------------------------------------------
 // Runtime Parameters (provided by ReShade runtime)
@@ -345,7 +333,7 @@ uniform int FrameCount < source="framecount"; >;
 
 //--------------------------------------------------------------------------------
 // Compile-time constants 
-#define PHI 1.61803398875 // Golden ratio. The specific rounding/precision of this value can create subtle irregularity in the decay cascade.
+#define PHI 1.61803398875 // Golden ratio
 #define MAX_DECAY_LEVELS 10
 #define INV_31 0.032258064516129 // 1/31
 #define INV_63 0.015873015873016 // 1/63
@@ -371,6 +359,40 @@ static const int bayer8[64] = {
 };
 
 //--------------------------------------------------------------------------------
+// Digit overlay for debug frame counter
+// 4-wide x 5-tall bitmap per digit
+// Usage: call DrawFrameCounter() at end of shader before return
+// digit pixel lookup: digits 0-9, 5 rows, 4 cols packed as bools
+static const int digitRows[50] = {
+    0xE, 0xA, 0xA, 0xA, 0xE, // 0
+    0x4, 0xC, 0x4, 0x4, 0xE, // 1
+    0xE, 0x2, 0xE, 0x8, 0xE, // 2
+    0xE, 0x2, 0x6, 0x2, 0xE, // 3
+    0xA, 0xA, 0xE, 0x2, 0x2, // 4
+    0xE, 0x8, 0xE, 0x2, 0xE, // 5
+    0xE, 0x8, 0xE, 0xA, 0xE, // 6
+    0xE, 0x2, 0x4, 0x4, 0x4, // 7
+    0xE, 0xA, 0xE, 0xA, 0xE, // 8
+    0xE, 0xA, 0xE, 0x2, 0xE, // 9
+};
+
+int DigitPixel(int d, int col, int row) {
+    int val = digitRows[d * 5 + row];
+    int shift = 3 - col;
+    int divided = val;
+    for (int i = 0; i < shift; i++)
+        divided /= 2;
+    return divided % 2;
+}
+
+float DrawDigit(int d, int2 pixel, int2 origin, int scale) {
+    int2 local = pixel - origin;
+    if (local.x < 0 || local.x >= 4 * scale) return 0.0;
+    if (local.y < 0 || local.y >= 5 * scale) return 0.0;
+    return DigitPixel(d, local.x / scale, local.y / scale) ? 1.0 : 0.0;
+}
+
+//--------------------------------------------------------------------------------
 // Frame Sampling
 float3 GetFrame(float2 uv) {
     return tex2Dlod(ReShade::BackBuffer, float4(uv, 0, 0)).rgb;
@@ -386,30 +408,32 @@ float GetBayerDither(int2 pixel, int size) {
 
 //--------------------------------------------------------------------------------
 // Main Pixel Shader
-float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
+float4 PS_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target
 {
     // --- Get preset-overridden values ---
     float beamVoltage = BeamVoltage;
     float beamCurrent = BeamCurrent;
-    float blackLevel = BlackLevel;
     float midtoneContrast = MidtoneContrast;
     float toneMapStrength = ToneMapStrength;
     float saturation = Saturation;
+    float hue = Hue;
+    float3 tintColor = TintColor;
     float decaySpeed = DecaySpeed;
     float ditherStrength = DitherStrength;
     bool quantize16Bit = Quantize16Bit;
+    float scanlineDarkness = ScanlineDarkness;
+    float scanlineThickness = ScanlineThickness;
+    float scanlineGapSize = ScanlineGapSize;
 
     switch (Preset)
     {
-        case 1: beamVoltage = 1.0; beamCurrent = 2.0; blackLevel = 0.500; break;
-        case 2: beamVoltage = 2.0; beamCurrent = 40.0; break;
-        case 3: beamVoltage = 1.8; beamCurrent = 60.0; midtoneContrast = 5.0; toneMapStrength = 1.00; blackLevel = 0; decaySpeed = 25.00; break;
-        default: break; // 0 Manual -> keep uniforms
+        case 1: beamVoltage = 2.0; beamCurrent = 40.0; toneMapStrength = 0.9; decaySpeed = 1.0; break;
+        case 2: beamVoltage = 1.5; beamCurrent = 5.0; toneMapStrength = 0.85; saturation = 1.1; hue = 2.0; tintColor = float3(1.0, 0.95, 0.85); decaySpeed = 8.0; scanlineDarkness = 0.5; scanlineThickness = 3.0; scanlineGapSize = 2.0; break;        
+        default: break; // Manual: keep uniforms
     }
 
     // --- LCD Burn-in Protection ---
     int effectiveFrameCount = FrameCount;
-    float phaseOffset = 0.0;
 
     if (LCDSafeMode && (FramesPerEffect % 2 == 0))
     {
@@ -426,18 +450,14 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
         }
         else if (PhaseFlipMethod == 1)
         {
-           // Method 2: Phase Flip - alternating polarity
-            phaseOffset = 0.5 * ((FrameCount / protectionInterval) % 2);
-        }
-        else if (PhaseFlipMethod == 2)
-        {
-             // Method 3: Frame Drop - skip frames to shift phase
+            // Method 2: Frame Drop - skip frames to shift phase
             effectiveFrameCount -= FrameCount / protectionInterval;
         }
     }
 
     // --- CRT timing simulation ---
-    const float fraction = frac((effectiveFrameCount * rcp(DebugSlowFactor) * rcp(FramesPerEffect)) + phaseOffset);
+    const float rawFraction = frac((effectiveFrameCount * rcp(DebugSlowFactor) * rcp(FramesPerEffect)));
+    const float fraction = DebugFrameStep ? floor(rawFraction * FramesPerEffect) * rcp(FramesPerEffect) : rawFraction;
 
     // --- Sample source frame (sRGB encoded, ~2.2 gamma) ---
     float3 frameCurr = GetFrame(texcoord);
@@ -445,7 +465,7 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
     // --- Apply CRT power-law curve: simulates phosphor response to electron beam voltage (contrast shaping, nonlinear gamma) ---
     frameCurr = pow(frameCurr, beamVoltage);
 
-    // --- Midtone contrast boost. Parabola peaks at 0.5. ---
+    // --- Midtone contrast boost. Parabola peaks at 0.5, multiplicative so blacks are unaffected. ---
     float3 midtone = frameCurr * (1.0 - frameCurr) * 4.0;
     frameCurr += frameCurr * midtone * midtoneContrast;
     
@@ -453,24 +473,13 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
     int2 pixelCoord = int2(pos.xy);
     float ditherVal = GetBayerDither(pixelCoord, DitherSize);
 
-    // --- Temporal dithering (pattern shifts each frame, modulo instead of bitwise for dx9 compatability) ---
-    if (TemporalDither) {
-        ditherVal = frac(ditherVal + (FrameCount % FramesPerEffect) * rcp(FramesPerEffect));
-    }
+    // --- Apply optional Voodoo2 16-bit quantization and dithering ---
+    float d = (ditherVal - 0.5) * ditherStrength;
 
-    // --- Apply dithering & optional 16-bit quantization ---
-    float3 noise = (ditherVal - 0.5) * ditherStrength;
-    
     if (quantize16Bit) {
-        frameCurr.r += noise.r * INV_31;
-        frameCurr.g += noise.g * INV_63;
-        frameCurr.b += noise.b * INV_31;
-        
-        frameCurr.r = floor(frameCurr.r * 31.0 + 0.5) * INV_31;
-        frameCurr.g = floor(frameCurr.g * 63.0 + 0.5) * INV_63;
-        frameCurr.b = floor(frameCurr.b * 31.0 + 0.5) * INV_31;
-    } else {
-        frameCurr += noise;
+        frameCurr.r = floor(clamp(frameCurr.r * 31.0 + d, 0.0, 31.0)) * INV_31;
+        frameCurr.g = floor(clamp(frameCurr.g * 63.0 + d, 0.0, 63.0)) * INV_63;
+        frameCurr.b = floor(clamp(frameCurr.b * 31.0 + d, 0.0, 31.0)) * INV_31;
     }
 
     // --- Apply electron gun current ---
@@ -488,24 +497,25 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 
     // --- Multi-stage Per-Channel Exponential Phosphor Decay ---
     //
-    // Golden-ratio-weighted (φ) exponential stages create perceptually smooth decay,
-    // mimicking how CRT phosphors naturally fade across R, G, and B channels.
+    // Each stage contributes a different slope at a different rate, their weighted sum
+    // producing a complex multi-slope curve that a single exponential cannot replicate.
+    // The decay cycle samples this curve at N points (Frames Per Cycle), repeated
+    // at the monitor refresh rate - the richer curve shape reads as more natural phosphor
+    // persistence compared to a plain single exponential.
     //
-    // [unroll] generates fixed instruction count regardless of DecayLevels setting,
+    // Per-channel decay multipliers (DecayMultR/G/B) allow independent timing per
+    // color channel, mimicking real phosphor chemistry where R/G/B components
+    // decay at different rates (P22-style).
+    // Early versions used fully independent φ multipliers and decay lengths per channel
+    // (phiR/G/B, DecayLengthR/G/B) for ultra-accurate phosphor chemistry. Simplified
+    // to a unified φ cascade with per-channel multipliers, preserving perceptual
+    // accuracy while reducing GPU cost.
+    //
+    // [unroll] generates fixed instruction count regardless of DecayLevels,
     // ensuring consistent performance on lower-end devices like Steam Deck.
-    // The if() disables unused stages at runtime without branching.
     //
-    // Native exp() is NON-NEGOTIABLE: Fibonacci-weighted exponential decay is HIGHLY
-    // sensitive to precision - approximations (exp2, fast_exp, etc.) destroy the
-    // perceptual effect. Single-exponential and bi-exponential models were tested;
-    // multi-stage φ-weighted decay provided superior motion clarity and phosphor realism.
-    //
-    // Early versions used independent φ multipliers (phiR/G/B) and decay lengths
-    // (DecayLengthR/G/B) per channel for ultra-accurate phosphor chemistry (P22-style).
-    // This was simplified to a unified φ cascade with per-channel decay multipliers,
-    // preserving perceptual accuracy and motion clarity while reducing GPU cost.
-    // Each color channel remains independent in timing/brightness, but shares the
-    // φ-weighted stage structure.
+    // Native exp() is NON-NEGOTIABLE: φ-weighted exponential decay is sensitive
+    // to precision - approximations (exp2, fast_exp etc.) degrade the curve shape.
 
     const float3 decayMult = float3(DecayMultR, DecayMultG, DecayMultB);
     const float decayBase = -decayPhase * decaySpeed;
@@ -524,21 +534,18 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 
     decay *= rcp(sum);
 
-    // --- Prevent full black collapse (raise floor) ---
-    decay = max(decay, blackLevel);
-
     // --- Apply phosphor decay ---
     float3 phosphorEmission = frameCurr * decay;
 
     // --- Apply static scanlines ---
-    if (ScanlineDarkness > 0.0) {
+    if (scanlineDarkness > 0.0) {
         float scanlineMask = 1.0;
         
         // Only apply scanline pattern if gaps are enabled
-        if (ScanlineGapSize > 0.0) {
+        if (scanlineGapSize > 0.0) {
             // Convert to integers to ensure pixel-perfect, consistent patterns
-            int brightWidth = int(ScanlineThickness);  // Width of bright scanline (phosphor glow)
-            int gapWidth = int(ScanlineGapSize);       // Width of dark gap between scanlines
+            int brightWidth = int(scanlineThickness);  // Width of bright scanline (phosphor glow)
+            int gapWidth = int(scanlineGapSize);       // Width of dark gap between scanlines
             int scanlinePattern = brightWidth + gapWidth;  // Total pattern size in pixels
             
             if (ScanlineDirection == 0) { // Horizontal scanlines
@@ -546,21 +553,16 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
                 int pixelInPattern = int(pos.y) % scanlinePattern;
                 
                 // Gap-first pattern: dark pixels come first (0 to gapWidth-1), then bright pixels
-                // This phase alignment:
-                // 1. Behaves more naturally with decay, no floaty feel
-                // 2. Placing rounding errors in dark regions (less visible)
-                // 3. Centering bright scanlines away from pattern boundaries (reduces strobing)
-                // 4. Providing stable luminance centroids for eye tracking
-                scanlineMask = pixelInPattern < gapWidth ? (1.0 - ScanlineDarkness) : 1.0;
+                scanlineMask = pixelInPattern < gapWidth ? (1.0 - scanlineDarkness) : 1.0;
                 
             } else if (ScanlineDirection == 1) { // Vertical scanlines
                 int pixelInPattern = int(pos.x) % scanlinePattern;
-                scanlineMask = pixelInPattern < gapWidth ? (1.0 - ScanlineDarkness) : 1.0;
+                scanlineMask = pixelInPattern < gapWidth ? (1.0 - scanlineDarkness) : 1.0;
                 
             } else if (ScanlineDirection == 2) { // Trinitron mode (horizontal scanlines + vertical aperture grille)
-                // Apply horizontal scanlines (standard raster scanning)
+                // Apply horizontal scanlines
                 int pixelInPatternH = int(pos.y) % scanlinePattern;
-                float maskH = pixelInPatternH < gapWidth ? (1.0 - ScanlineDarkness) : 1.0;
+                float maskH = pixelInPatternH < gapWidth ? (1.0 - scanlineDarkness) : 1.0;
                 
                 // Apply Trinitron aperture grille (vertical RGB phosphor stripes)
                 // Each pixel is divided into R, G, B sub-pixels (3 stripes per pixel)
@@ -587,8 +589,8 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
                 int pixelInPatternV = int(pos.x) % scanlinePattern;
                 
                 // Create separate masks for horizontal and vertical
-                float maskH = pixelInPatternH < gapWidth ? (1.0 - ScanlineDarkness) : 1.0;
-                float maskV = pixelInPatternV < gapWidth ? (1.0 - ScanlineDarkness) : 1.0;
+                float maskH = pixelInPatternH < gapWidth ? (1.0 - scanlineDarkness) : 1.0;
+                float maskV = pixelInPatternV < gapWidth ? (1.0 - scanlineDarkness) : 1.0;
                 
                 // Multiply masks together to create crosshatch grid
                 // Dark gaps appear where either horizontal OR vertical gaps exist
@@ -613,8 +615,8 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
     }
 
     // --- Hue shift ---
-    if (Hue != 0.0) {
-        float angle = radians(Hue);
+    if (hue != 0.0) {  // skip matrix if no shift
+        float angle = radians(hue);
         float s = sin(angle);
         float c = cos(angle);
         
@@ -626,6 +628,10 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
         
         phosphorEmission = mul(hueMatrix, phosphorEmission);
     }
+
+    // --- Phosphor Tint ---
+    if (any(tintColor != float3(1.0, 1.0, 1.0)))
+        phosphorEmission *= tintColor;
 
     // --- Split Screen Comparison Mode ---
     if (EnableSplitScreen) {
@@ -643,6 +649,30 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
         }
     }
     
+    // --- Debug Frame Number Overlay ---
+    if (DebugFrameStep) {
+        int frameNum = int(floor(rawFraction * FramesPerEffect)) + 1;
+
+        int2 pixel = int2(pos.xy);
+        int scale = 4;
+        int margin = 8;
+
+        // How many digits wide is the display?
+        int numDigits = FramesPerEffect >= 10 ? 2 : 1;
+        int totalWidth = numDigits * 5 * scale; // 5 = 4 wide + 1 gap
+
+        // Anchor to top-right
+        int2 origin = int2(BUFFER_WIDTH - totalWidth - margin, margin);
+
+        float ink = 0.0;
+        if (FramesPerEffect >= 10)
+            ink += DrawDigit(frameNum / 10, pixel, origin, scale);
+        ink += DrawDigit(frameNum % 10, pixel, origin + int2((FramesPerEffect >= 10 ? 5 : 0) * scale, 0), scale);
+
+        if (ink > 0.0)
+            phosphorEmission = float3(1.0, 1.0, 0.0);
+    }
+
     // Return as-is, preserves HDR-like bright highlights. Softclip (earlier in pipeline) handles extreme brightness gracefully. 
     // Should not have visual artifacts (negative colors, NaN issues), so no need for saturate()
     return float4(phosphorEmission, 1.0);
@@ -650,7 +680,6 @@ float4 PS_CRT_Dusha(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_T
 
 //--------------------------------------------------------------------------------
 // Technique declaration
-technique CRT_Dusha {
-    pass { VertexShader = PostProcessVS; PixelShader = PS_CRT_Dusha; }
+technique Dusha {
+    pass { VertexShader = PostProcessVS; PixelShader = PS_Dusha; }
 }
-
