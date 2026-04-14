@@ -120,7 +120,7 @@ uniform float BeamVoltage <
     ui_min=0.01; ui_max=10.0; ui_step=0.01; 
     ui_label="Contrast";
     ui_tooltip="Controls image contrast via gamma curve.\n\nHigher values can be compensated with Brightness to create more vivid image.\n\nTechnical: Simulates electron beam accelerating voltage affecting the phosphor's power-law response curve."; 
-> = 2.2;
+> = 1.0;
 
 uniform float BeamCurrent < 
     ui_category="CRT Display"; 
@@ -128,7 +128,7 @@ uniform float BeamCurrent <
     ui_min=0.1; ui_max=1000.0; ui_step=1.0; 
     ui_label="Brightness"; 
     ui_tooltip="Controls overall image brightness.\n\nCompensates for the darkening from contrast curve. Adjust together with Contrast for best results, higher Contrast needs higher Brightness.\n\nTechnical: Simulates electron beam current strength (number of electrons striking the phosphor per frame)."; 
-> = 15.0;
+> = 1.0;
 
 uniform float MidtoneContrast < 
     ui_category="CRT Display"; 
@@ -136,15 +136,15 @@ uniform float MidtoneContrast <
     ui_min=0.0; ui_max=50.0; ui_step=0.01; 
     ui_label="Midtone Boost"; 
     ui_tooltip="Boosts contrast in midtones without crushing shadows or blowing highlights too much. Can be used to fine-tune authentic CRT punch."; 
-> = 0.0;
+> = 0.30;
 
 uniform float ToneMapStrength < 
     ui_category="CRT Display"; 
     ui_type="slider"; 
     ui_min=0.00; ui_max=1.0; ui_step=0.01; 
     ui_label="Softclip Strength"; 
-    ui_tooltip="Phosphor saturation compression strength.\n\n1.0 = Full (Reinhard) softclip - correct for SDR CRT simulation, phosphor saturates naturally at high drive levels.\n0.1 - 0.9 = Partial compression - reduces highlight rolloff strength, less physically accurate but may suit personal preference.\n0.0 = No compression - linear output, highlights are not rolled off. Use with HDR pipelines or when downstream tonemapping handles highlight compression.";
-> = 1.0;
+    ui_tooltip = "Phosphor saturation compression strength.\n\n0.0 = Disabled (default) - no highlight rolloff. At default Contrast (1.0) and Brightness (1.0) this produces the most accurate CRT-like output with no extra processing applied to highlights.\n\n0.1 - 0.9 = Partial compression - softens highlights progressively. Useful when boosting Contrast and Brightness above defaults.\n\n1.0 = Full Reinhard softclip - strong highlight rolloff. Physically models phosphor saturation at high beam drive levels. Recommended when using high Contrast/Brightness values to prevent harsh clipping.";
+> = 0.0;
 
 // === COLOR ADJUSTMENT ===
 uniform float Saturation < 
